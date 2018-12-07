@@ -37,9 +37,9 @@ test: install regenerate_test_gogo regenerate_test_golang
 
 regenerate:
 	@echo "--- Regenerating validator.proto"
-	(protoc \
-	--proto_path=${GOPATH}/src \
-	--proto_path=${GOPATH}/src/github.com/gogo/protobuf/protobuf \
+	(cd ${GOPATH}/src && protoc \
 	--proto_path=. \
-	--gogo_out=Mgoogle/protobuf/descriptor.proto=github.com/gogo/protobuf/protoc-gen-gogo/descriptor:. \
-	validator.proto)
+	--proto_path=${GOPATH}/src/github.com/gogo/protobuf/protobuf \
+	--gogo_out=paths=source_relative,Mgoogle/protobuf/descriptor.proto=github.com/gogo/protobuf/protoc-gen-gogo/descriptor:. \
+	github.com/mwitkow/go-proto-validators/validator.proto \
+	)

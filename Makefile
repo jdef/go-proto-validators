@@ -40,6 +40,6 @@ regenerate:
 	(cd ${GOPATH}/src && protoc \
 	--proto_path=. \
 	--proto_path=${GOPATH}/src/github.com/gogo/protobuf/protobuf \
-	--gogo_out=paths=source_relative,Mgoogle/protobuf/descriptor.proto=github.com/gogo/protobuf/protoc-gen-gogo/descriptor:. \
+	--go_out=paths=source_relative,Mgoogle/protobuf/descriptor.proto=github.com/golang/protobuf/protoc-gen-go/descriptor:. \
 	github.com/mwitkow/go-proto-validators/validator.proto \
 	)

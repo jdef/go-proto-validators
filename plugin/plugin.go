@@ -56,10 +56,11 @@ import (
 	"strings"
 
 	"github.com/gogo/protobuf/gogoproto"
-	"github.com/gogo/protobuf/proto"
-	descriptor "github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
+	gogo "github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/protoc-gen-gogo/generator"
 	"github.com/gogo/protobuf/vanity"
+	"github.com/golang/protobuf/proto"
+	descriptor "github.com/golang/protobuf/protoc-gen-go/descriptor"
 	"github.com/mwitkow/go-proto-validators"
 )
 
@@ -110,6 +111,7 @@ func (p *plugin) Generate(file *generator.FileDescriptor) {
 
 func getFieldValidatorIfAny(field *descriptor.FieldDescriptorProto) *validator.FieldValidator {
 	if field.Options != nil {
+		// TODO(jdef) field.Options comes from gogo and results in an empty result here.
 		v, err := proto.GetExtension(field.Options, validator.E_Field)
 		if err == nil && v.(*validator.FieldValidator) != nil {
 			return (v.(*validator.FieldValidator))
@@ -142,10 +144,36 @@ func (p *plugin) isSupportedFloat(field *descriptor.FieldDescriptorProto) bool {
 	return false
 }
 
+func asField(m gogo.Message) *descriptor.FieldDescriptorProto {
+	data, err := gogo.Marshal(m)
+	if err != nil {
+		panic(err)
+	}
+	var f descriptor.FieldDescriptorProto
+	err = proto.Unmarshal(data, &f)
+	if err != nil {
+		panic(err)
+	}
+	return &f
+}
+
+func asDesc(m gogo.Message) *descriptor.DescriptorProto {
+	data, err := gogo.Marshal(m)
+	if err != nil {
+		panic(err)
+	}
+	var f descriptor.DescriptorProto
+	err = proto.Unmarshal(data, &f)
+	if err != nil {
+		panic(err)
+	}
+	return &f
+}
+
 func (p *plugin) generateRegexVars(file *generator.FileDescriptor, message *generator.Descriptor) {
 	ccTypeName := generator.CamelCaseSlice(message.TypeName())
 	for _, field := range message.Field {
-		validator := getFieldValidatorIfAny(field)
+		validator := getFieldValidatorIfAny(asField(field))
 		if validator != nil && validator.Regex != nil {
 			fieldName := p.GetOneOfFieldName(message, field)
 			p.P(`var `, p.regexName(ccTypeName, fieldName), ` = `, p.regexPkg.Use(), `.MustCompile(`, "`", *validator.Regex, "`", `)`)
@@ -160,7 +188,7 @@ func (p *plugin) generateProto2Message(file *generator.FileDescriptor, message *
 	p.In()
 	for _, field := range message.Field {
 		fieldName := p.GetFieldName(message, field)
-		fieldValidator := getFieldValidatorIfAny(field)
+		fieldValidator := getFieldValidatorIfAny(asField(field))
 		if fieldValidator == nil && !field.IsMessage() {
 			continue
 		}
@@ -200,9 +228,9 @@ func (p *plugin) generateProto2Message(file *generator.FileDescriptor, message *
 		}
 		if field.IsString() {
 			p.generateStringValidator(variableName, ccTypeName, fieldName, fieldValidator)
-		} else if p.isSupportedInt(field) {
+		} else if p.isSupportedInt(asField(field)) {
 			p.generateIntValidator(variableName, ccTypeName, fieldName, fieldValidator)
-		} else if p.isSupportedFloat(field) {
+		} else if p.isSupportedFloat(asField(field)) {
 			p.generateFloatValidator(variableName, ccTypeName, fieldName, fieldValidator)
 		} else if field.IsBytes() {
 			p.generateLengthValidator(variableName, ccTypeName, fieldName, fieldValidator)
@@ -239,7 +267,7 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 	p.P(`func (this *`, ccTypeName, `) Validate() error {`)
 	p.In()
 	for _, field := range message.Field {
-		fieldValidator := getFieldValidatorIfAny(field)
+		fieldValidator := getFieldValidatorIfAny(asField(field))
 		if fieldValidator == nil && !field.IsMessage() {
 			continue
 		}
@@ -249,7 +277,7 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 		repeated := field.IsRepeated()
 		// Golang's proto3 has no concept of unset primitive fields
 		nullable := (gogoproto.IsNullable(field) || !gogoproto.ImportsGoGoProto(file.FileDescriptorProto)) && field.IsMessage()
-		if p.fieldIsProto3Map(file, message, field) {
+		if p.fieldIsProto3Map(file, message, asField(field)) {
 			p.P(`// Validation of proto3 map<> fields is unsupported.`)
 			continue
 		}
@@ -278,9 +306,9 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 		}
 		if field.IsString() {
 			p.generateStringValidator(variableName, ccTypeName, fieldName, fieldValidator)
-		} else if p.isSupportedInt(field) {
+		} else if p.isSupportedInt(asField(field)) {
 			p.generateIntValidator(variableName, ccTypeName, fieldName, fieldValidator)
-		} else if p.isSupportedFloat(field) {
+		} else if p.isSupportedFloat(asField(field)) {
 			p.generateFloatValidator(variableName, ccTypeName, fieldName, fieldValidator)
 		} else if field.IsBytes() {
 			p.generateLengthValidator(variableName, ccTypeName, fieldName, fieldValidator)
@@ -537,17 +565,18 @@ func (p *plugin) fieldIsProto3Map(file *generator.FileDescriptor, message *gener
 	// NOTE: Do not set the option in .proto files. Always use the maps syntax
 	// instead. The option should only be implicitly set by the proto compiler
 	// parser.
-	if field.GetType() != descriptor.FieldDescriptorProto_TYPE_MESSAGE || !field.IsRepeated() {
+	repeated := field.Label != nil && *field.Label == descriptor.FieldDescriptorProto_LABEL_REPEATED
+	if field.GetType() != descriptor.FieldDescriptorProto_TYPE_MESSAGE || !repeated {
 		return false
 	}
 	typeName := field.GetTypeName()
 	var msg *descriptor.DescriptorProto
 	if strings.HasPrefix(typeName, ".") {
 		// Fully qualified case, look up in global map, must work or fail badly.
-		msg = p.ObjectNamed(field.GetTypeName()).(*generator.Descriptor).DescriptorProto
+		msg = asDesc(p.ObjectNamed(field.GetTypeName()).(*generator.Descriptor).DescriptorProto)
 	} else {
 		// Nested, relative case.
-		msg = file.GetNestedMessage(message.DescriptorProto, field.GetTypeName())
+		msg = asDesc(file.GetNestedMessage(message.DescriptorProto, field.GetTypeName()))
 	}
 	return msg.GetOptions().GetMapEntry()
 }

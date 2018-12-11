@@ -35,6 +35,22 @@ func (f *fieldError) GRPCStatus() *status.Status {
 	return status.New(codes.InvalidArgument, f.Error())
 }
 
+func (f *fieldError) Replace(i int, fieldName string) error {
+	stack := make([]string, len(f.fieldStack))
+	for j := range stack {
+		if i == j {
+			stack[j] = fieldName
+		} else {
+			stack[j] = f.fieldStack[j]
+		}
+	}
+	return &fieldError{fieldStack: stack, nestedErr: f.nestedErr}
+}
+
+type Replacer interface {
+	Replace(int, string) error
+}
+
 // FieldError wraps a given Validator error providing a message call stack.
 func FieldError(fieldName string, err error) error {
 	if fErr, ok := err.(*fieldError); ok {

@@ -3,10 +3,12 @@
 
 export PATH := ${GOPATH}/bin:${PATH}
 
+.PHONY: install
 install:
 	@echo "--- Installing govalidators to GOPATH"
 	go install github.com/mwitkow/go-proto-validators/protoc-gen-govalidators
 
+.PHONY: regenerate_test_gogo
 regenerate_test_gogo:
 	@echo "Regenerating test .proto files with gogo imports"
 	(protoc  \
@@ -15,6 +17,7 @@ regenerate_test_gogo:
 	--gogo_out=test/gogo \
 	--govalidators_out=gogoimport=true:test/gogo test/*.proto)
 
+.PHONY: regenerate_test_golang
 regenerate_test_golang:
 	@echo "--- Regenerating test .proto files with golang imports"
 	(protoc  \
@@ -23,6 +26,7 @@ regenerate_test_golang:
 	--go_out=test/golang \
 	--govalidators_out=test/golang test/*.proto)
 
+.PHONY: regenerate_example
 regenerate_example: install
 	@echo "--- Regenerating example directory"
 	(protoc  \
@@ -31,10 +35,12 @@ regenerate_example: install
 	--go_out=. \
 	--govalidators_out=. examples/*.proto)
 
+.PHONY: test
 test: install regenerate_test_gogo regenerate_test_golang
 	@echo "Running tests"
-	go test -v ./...
+	go test -count=1 -v ./...
 
+.PHONY: regenerate
 regenerate:
 	@echo "--- Regenerating validator.proto"
 	(cd ${GOPATH}/src && protoc \

@@ -78,4 +78,10 @@ message ValidatorMessage3 {
 message RuleConsumer3 {
         string string_field = 1 [(validator.field) = { rules : "ValidatorMessage3.SomeString" }];
         int64 some_value = 2 [(validator.field) = { rules : "ValidatorMessage3.Embedded.SomeValue"}];
+
+        oneof another_string {
+                string f3 = 3 [(validator.field) = { rules : "ValidatorMessage3.SomeNonEmptyString" }];
+                string f4 = 4 [(validator.field) = { rules : "ValidatorMessage3.SomeString" }];
+        }
+
 }

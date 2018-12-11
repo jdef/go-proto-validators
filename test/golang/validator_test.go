@@ -4,6 +4,7 @@
 package validatortest
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -533,12 +534,26 @@ func TestOneOf_Regex(t *testing.T) {
 }
 
 func TestRuleConsumer3(t *testing.T) {
-	rc := &RuleConsumer3{
-		StringField: "abc",
-		SomeValue:   1,
-	}
-	err := rc.Validate()
-	if err != nil {
-		t.Fatal(err)
+	for ti, tc := range []struct {
+		m *RuleConsumer3
+	}{
+		{m: &RuleConsumer3{
+			StringField: "abc",
+			SomeValue:   1,
+		}},
+		{m: &RuleConsumer3{
+			StringField: "abc",
+			SomeValue:   1,
+			AnotherString: &RuleConsumer3_F3{
+				F3: "a",
+			},
+		}},
+	} {
+		t.Run(strconv.Itoa(ti), func(t *testing.T) {
+			err := tc.m.Validate()
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

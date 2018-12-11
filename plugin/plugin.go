@@ -343,8 +343,6 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 		isOneOf := field.OneofIndex != nil
 		variableName := "this." + fieldName
 
-		p.generateRulesetValidator(variableName, ccTypeName, fieldName, fieldValidator)
-
 		repeated := field.IsRepeated()
 		// Golang's proto3 has no concept of unset primitive fields
 		nullable := (gogoproto.IsNullable(field) || !gogoproto.ImportsGoGoProto(file.FileDescriptorProto)) && field.IsMessage()
@@ -368,6 +366,7 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 			p.P(`if oneOfNester, ok := this.Get` + oneOfName + `().(* ` + oneOfType + `); ok {`)
 			variableName = "oneOfNester." + p.GetOneOfFieldName(message, field)
 		}
+		p.generateRulesetValidator(variableName, ccTypeName, fieldName, fieldValidator)
 		if repeated {
 			p.generateRepeatedCountValidator(variableName, ccTypeName, fieldName, fieldValidator)
 			if field.IsMessage() || p.validatorWithNonRepeatedConstraint(fieldValidator) {

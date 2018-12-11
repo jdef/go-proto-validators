@@ -358,7 +358,7 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 			p.P(fieldName, `, _ := _`, fieldName, `.(`, t, `)`)
 		}
 		if isOneOf {
-			// XXX does not support rule validation
+			// TODO not supported when p.ruleset != ""
 			p.In()
 			oneOfName := p.GetFieldName(message, field)
 			oneOfType := p.OneOfTypeName(message, field)
@@ -366,8 +366,8 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 			p.P(`if oneOfNester, ok := this.Get` + oneOfName + `().(* ` + oneOfType + `); ok {`)
 			variableName = "oneOfNester." + p.GetOneOfFieldName(message, field)
 		}
-		p.generateRulesetValidator(variableName, ccTypeName, fieldName, fieldValidator)
 		if repeated {
+			// TODO not supported when p.ruleset != ""
 			p.generateRepeatedCountValidator(variableName, ccTypeName, fieldName, fieldValidator)
 			if field.IsMessage() || p.validatorWithNonRepeatedConstraint(fieldValidator) {
 				p.P(`for _, item := range `, variableName, `{`)
@@ -382,6 +382,7 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 				fmt.Fprintf(os.Stderr, "WARNING: field %v.%v is not repeated, validator.max_elts has no effects\n", ccTypeName, fieldName)
 			}
 		}
+		p.generateRulesetValidator(variableName, ccTypeName, fieldName, fieldValidator)
 		if field.IsString() {
 			p.generateStringValidator(variableName, ccTypeName, fieldName, fieldValidator)
 		} else if p.isSupportedInt(f) {

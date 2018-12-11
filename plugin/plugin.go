@@ -115,7 +115,6 @@ func (p *plugin) Generate(file *generator.FileDescriptor) {
 			// Checking for messages that are self-declared rule sets.
 			pd := asDesc(msg.DescriptorProto)
 			v, err := proto.GetExtension(pd.Options, validator.E_Rules)
-			println("found rules extension")
 			if err != nil || v.(*bool) == nil {
 				continue
 			}
@@ -125,7 +124,6 @@ func (p *plugin) Generate(file *generator.FileDescriptor) {
 			// We have a rule set message, parse it.
 			// Keep track of the rules in this set so that we can reference them later.
 			p.ruleset = generator.CamelCaseSlice(msg.TypeName())
-			println("parsing rule set " + p.ruleset) // XXX debug
 			p.generateRegexVars(file, msg)
 			p.P(`var `, `_rules_`, p.ruleset, ` = map[string]func(interface{}) error {`)
 			p.In()

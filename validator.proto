@@ -19,6 +19,11 @@ extend google.protobuf.FieldOptions {
   optional FieldValidator field = 65020;
 }
 
+extend google.protobuf.MessageOptions {
+  // Rules, when true, indicates that the message contains a set of referenceable rules.
+  optional bool rules = 65020;
+}
+
 message FieldValidator {
   // Uses a Golang RE2-syntax regex to match the field contents.
   optional string regex = 1;
@@ -62,5 +67,6 @@ message FieldValidator {
   optional int64 length_lt = 15;
   // Field value of integer strictly equal this value.
   optional int64 length_eq = 16;
-
+  // validate this field using the named ruleset
+  optional string rules = 17;
 }

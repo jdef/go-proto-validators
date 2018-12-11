@@ -72,10 +72,12 @@ type plugin struct {
 	protoPkg      generator.Single
 	validatorPkg  generator.Single
 	useGogoImport bool
+	ruleset       string
+	regexVars     map[string]bool
 }
 
 func NewPlugin(useGogoImport bool) generator.Plugin {
-	return &plugin{useGogoImport: useGogoImport}
+	return &plugin{useGogoImport: useGogoImport, regexVars: map[string]bool{}}
 }
 
 func (p *plugin) Name() string {
@@ -95,23 +97,51 @@ func (p *plugin) Generate(file *generator.FileDescriptor) {
 	p.fmtPkg = p.NewImport("fmt")
 	p.validatorPkg = p.NewImport("github.com/mwitkow/go-proto-validators")
 
-	for _, msg := range file.Messages() {
-		if msg.DescriptorProto.GetOptions().GetMapEntry() {
-			continue
+	for _, parseRuleSets := range []bool{true, false} {
+		for _, msg := range file.Messages() {
+			p.ruleset = ""
+			if msg.DescriptorProto.GetOptions().GetMapEntry() {
+				continue
+			}
+			if !parseRuleSets {
+				p.generateRegexVars(file, msg)
+				if gogoproto.IsProto3(file.FileDescriptorProto) {
+					p.generateProto3Message(file, msg)
+				} else {
+					p.generateProto2Message(file, msg)
+				}
+				continue
+			}
+			// Checking for messages that are self-declared rule sets.
+			pd := asDesc(msg.DescriptorProto)
+			v, err := proto.GetExtension(pd.Options, validator.E_Rules)
+			println("found rules extension")
+			if err != nil || v.(*bool) == nil {
+				continue
+			}
+			if b := v.(*bool); !*b {
+				continue
+			}
+			// We have a rule set message, parse it.
+			// Keep track of the rules in this set so that we can reference them later.
+			p.ruleset = generator.CamelCaseSlice(msg.TypeName())
+			println("parsing rule set " + p.ruleset) // XXX debug
+			p.generateRegexVars(file, msg)
+			p.P(`var `, `_rules_`, p.ruleset, ` = map[string]func(interface{}) error {`)
+			p.In()
+			if gogoproto.IsProto3(file.FileDescriptorProto) {
+				p.generateProto3Message(file, msg)
+			} else {
+				p.generateProto2Message(file, msg)
+			}
+			p.Out()
+			p.P(`}`)
 		}
-		p.generateRegexVars(file, msg)
-		if gogoproto.IsProto3(file.FileDescriptorProto) {
-			p.generateProto3Message(file, msg)
-		} else {
-			p.generateProto2Message(file, msg)
-		}
-
 	}
 }
 
 func getFieldValidatorIfAny(field *descriptor.FieldDescriptorProto) *validator.FieldValidator {
 	if field.Options != nil {
-		// TODO(jdef) field.Options comes from gogo and results in an empty result here.
 		v, err := proto.GetExtension(field.Options, validator.E_Field)
 		if err == nil && v.(*validator.FieldValidator) != nil {
 			return (v.(*validator.FieldValidator))
@@ -176,7 +206,12 @@ func (p *plugin) generateRegexVars(file *generator.FileDescriptor, message *gene
 		validator := getFieldValidatorIfAny(asField(field))
 		if validator != nil && validator.Regex != nil {
 			fieldName := p.GetOneOfFieldName(message, field)
-			p.P(`var `, p.regexName(ccTypeName, fieldName), ` = `, p.regexPkg.Use(), `.MustCompile(`, "`", *validator.Regex, "`", `)`)
+			vname := p.regexName(ccTypeName, fieldName)
+			if p.regexVars[vname] {
+				continue
+			}
+			p.P(`var `, vname, ` = `, p.regexPkg.Use(), `.MustCompile(`, "`", *validator.Regex, "`", `)`)
+			p.regexVars[vname] = true
 		}
 	}
 }
@@ -184,18 +219,36 @@ func (p *plugin) generateRegexVars(file *generator.FileDescriptor, message *gene
 func (p *plugin) generateProto2Message(file *generator.FileDescriptor, message *generator.Descriptor) {
 	ccTypeName := generator.CamelCaseSlice(message.TypeName())
 
-	p.P(`func (this *`, ccTypeName, `) Validate() error {`)
-	p.In()
+	if p.ruleset == "" {
+		p.P(`func (this *`, ccTypeName, `) Validate() error {`)
+		p.In()
+	}
 	for _, field := range message.Field {
 		fieldName := p.GetFieldName(message, field)
-		fieldValidator := getFieldValidatorIfAny(asField(field))
+		f := asField(field)
+		fieldValidator := getFieldValidatorIfAny(f)
 		if fieldValidator == nil && !field.IsMessage() {
 			continue
 		}
 		if p.validatorWithMessageExists(fieldValidator) {
 			fmt.Fprintf(os.Stderr, "WARNING: field %v.%v is a proto2 message, validator.msg_exists has no effect\n", ccTypeName, fieldName)
 		}
+		if fieldValidator.GetRules() != "" && p.ruleset != "" {
+			// We don't support this yet because there are no checks for
+			// infinite graph loops.
+			fmt.Fprintf(os.Stderr, "WARNING: rule-set messages may not specify `rules` fields: %v.%v\n", ccTypeName, fieldName)
+			continue
+
+		}
 		variableName := "this." + fieldName
+		p.generateRulesetValidator(variableName, ccTypeName, fieldName, fieldValidator)
+		if p.ruleset != "" {
+			variableName = fieldName
+			t, _ := p.GoType(message, field)
+			p.P(`"`, field.Name, `": func(_`, fieldName, ` interface{}) error {`)
+			p.In()
+			p.P(fieldName, `, _ := _`, fieldName, `.(`, t, `)`)
+		}
 		repeated := field.IsRepeated()
 		nullable := gogoproto.IsNullable(field)
 		// For proto2 syntax, only Gogo generates non-pointer fields
@@ -215,7 +268,7 @@ func (p *plugin) generateProto2Message(file *generator.FileDescriptor, message *
 			}
 		} else if nonpointer {
 			// can use the field directly
-		} else if !field.IsMessage() {
+		} else if !field.IsMessage() && p.ruleset == "" {
 			variableName = `this.Get` + fieldName + `()`
 		}
 		if !repeated && fieldValidator != nil {
@@ -228,9 +281,9 @@ func (p *plugin) generateProto2Message(file *generator.FileDescriptor, message *
 		}
 		if field.IsString() {
 			p.generateStringValidator(variableName, ccTypeName, fieldName, fieldValidator)
-		} else if p.isSupportedInt(asField(field)) {
+		} else if p.isSupportedInt(f) {
 			p.generateIntValidator(variableName, ccTypeName, fieldName, fieldValidator)
-		} else if p.isSupportedFloat(asField(field)) {
+		} else if p.isSupportedFloat(f) {
 			p.generateFloatValidator(variableName, ccTypeName, fieldName, fieldValidator)
 		} else if field.IsBytes() {
 			p.generateLengthValidator(variableName, ccTypeName, fieldName, fieldValidator)
@@ -256,32 +309,60 @@ func (p *plugin) generateProto2Message(file *generator.FileDescriptor, message *
 			p.Out()
 			p.P(`}`)
 		}
+		if p.ruleset != "" {
+			p.P(`return nil`)
+			p.Out()
+			p.P(`},`)
+		}
 	}
-	p.P(`return nil`)
-	p.Out()
-	p.P(`}`)
+	if p.ruleset == "" {
+		p.P(`return nil`)
+		p.Out()
+		p.P(`}`)
+	}
 }
 
 func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *generator.Descriptor) {
 	ccTypeName := generator.CamelCaseSlice(message.TypeName())
-	p.P(`func (this *`, ccTypeName, `) Validate() error {`)
-	p.In()
+	if p.ruleset == "" {
+		p.P(`func (this *`, ccTypeName, `) Validate() error {`)
+		p.In()
+	}
 	for _, field := range message.Field {
-		fieldValidator := getFieldValidatorIfAny(asField(field))
+		f := asField(field)
+		fieldValidator := getFieldValidatorIfAny(f)
 		if fieldValidator == nil && !field.IsMessage() {
 			continue
 		}
-		isOneOf := field.OneofIndex != nil
 		fieldName := p.GetOneOfFieldName(message, field)
+		if fieldValidator.GetRules() != "" && p.ruleset != "" {
+			// We don't support this yet because there are no checks for
+			// infinite graph loops.
+			fmt.Fprintf(os.Stderr, "WARNING: rule-set messages may not specify `rules` fields: %v.%v\n", ccTypeName, fieldName)
+			continue
+
+		}
+		isOneOf := field.OneofIndex != nil
 		variableName := "this." + fieldName
+
+		p.generateRulesetValidator(variableName, ccTypeName, fieldName, fieldValidator)
+
 		repeated := field.IsRepeated()
 		// Golang's proto3 has no concept of unset primitive fields
 		nullable := (gogoproto.IsNullable(field) || !gogoproto.ImportsGoGoProto(file.FileDescriptorProto)) && field.IsMessage()
-		if p.fieldIsProto3Map(file, message, asField(field)) {
+		if p.fieldIsProto3Map(file, message, f) {
 			p.P(`// Validation of proto3 map<> fields is unsupported.`)
 			continue
 		}
+		if p.ruleset != "" {
+			variableName = fieldName
+			t, _ := p.GoType(message, field)
+			p.P(`"`, field.Name, `": func(_`, fieldName, ` interface{}) error {`)
+			p.In()
+			p.P(fieldName, `, _ := _`, fieldName, `.(`, t, `)`)
+		}
 		if isOneOf {
+			// XXX does not support rule validation
 			p.In()
 			oneOfName := p.GetFieldName(message, field)
 			oneOfType := p.OneOfTypeName(message, field)
@@ -306,9 +387,9 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 		}
 		if field.IsString() {
 			p.generateStringValidator(variableName, ccTypeName, fieldName, fieldValidator)
-		} else if p.isSupportedInt(asField(field)) {
+		} else if p.isSupportedInt(f) {
 			p.generateIntValidator(variableName, ccTypeName, fieldName, fieldValidator)
-		} else if p.isSupportedFloat(asField(field)) {
+		} else if p.isSupportedFloat(f) {
 			p.generateFloatValidator(variableName, ccTypeName, fieldName, fieldValidator)
 		} else if field.IsBytes() {
 			p.generateLengthValidator(variableName, ccTypeName, fieldName, fieldValidator)
@@ -326,10 +407,11 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 					fmt.Fprintf(os.Stderr, "WARNING: field %v.%v is a nullable=false, validator.msg_exists has no effect\n", ccTypeName, fieldName)
 				}
 			}
-			if nullable {
+			nullcheck := nullable && p.ruleset == ""
+			if nullcheck {
 				p.P(`if `, variableName, ` != nil {`)
 				p.In()
-			} else {
+			} else if p.ruleset == "" {
 				// non-nullable fields in proto3 store actual structs, we need pointers to operate on interfaces
 				variableName = "&(" + variableName + ")"
 			}
@@ -338,7 +420,7 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 			p.P(`return `, p.validatorPkg.Use(), `.FieldError("`, fieldName, `", err)`)
 			p.Out()
 			p.P(`}`)
-			if nullable {
+			if nullcheck {
 				p.Out()
 				p.P(`}`)
 			}
@@ -353,8 +435,56 @@ func (p *plugin) generateProto3Message(file *generator.FileDescriptor, message *
 			p.Out()
 			p.P(`}`)
 		}
+		if p.ruleset != "" {
+			p.P(`return nil`)
+			p.Out()
+			p.P(`},`)
+		}
 	}
-	p.P(`return nil`)
+	if p.ruleset == "" {
+		p.P(`return nil`)
+		p.Out()
+		p.P(`}`)
+	}
+}
+
+func (p *plugin) generateRulesetValidator(variableName, ccTypeName, fieldName string, fv *validator.FieldValidator) {
+	rules := fv.GetRules()
+	if rules == "" {
+		return
+	}
+	// Look up rule set and apply them here
+	//
+	// rule set references look like:
+	//   Message.field
+	// or
+	//   Message.SubMessage.field
+	// essentially
+	//   <dot_separated_message_type>.<field>
+	//
+	// TODO(jdef) add type-checking at protoc-compile time so that
+	// rules are only applied to fields of the same type as that for
+	// which the rule was originally declared.
+	ns := strings.SplitN(rules, ".", -1)
+	if len(ns) < 2 {
+		fmt.Fprintf(os.Stderr, "WARNING: field %v.%v references a ruleset using invalid syntax %q\n", ccTypeName, fieldName, rules)
+		return
+	}
+	rsName := `_rules_` + generator.CamelCaseSlice(ns[:len(ns)-1])
+	ruleField := ns[len(ns)-1]
+	p.P(`if ff, ok := `, rsName, `["`, ruleField, `"]; ok {`)
+	p.In()
+	p.P(`if err := ff(`, variableName, `); err != nil {`)
+	p.In()
+	p.P(`fe, ok := err.(`, p.validatorPkg.Use(), `.Replacer)`)
+	p.P(`if !ok {`)
+	p.In()
+	p.P(`return err`)
+	p.Out()
+	p.P(`}`)
+	p.P(`return fe.Replace(0,"`, fieldName, `")`)
+	p.Out()
+	p.P(`}`)
 	p.Out()
 	p.P(`}`)
 }
@@ -608,7 +738,24 @@ func (p *plugin) validatorWithNonRepeatedConstraint(fv *validator.FieldValidator
 	// Need to use reflection in order to be future-proof for new types of constraints.
 	v := reflect.ValueOf(*fv)
 	for i := 0; i < v.NumField(); i++ {
-		if v.Type().Field(i).Name != "RepeatedCountMin" && v.Type().Field(i).Name != "RepeatedCountMax" && v.Field(i).Pointer() != 0 {
+		n := v.Type().Field(i).Name
+		// TODO(jdef) there's probably a more elegant way to ignore the auto-gen'd
+		// XXX_ extra fields, but this stopped the test cases from panicking.
+		if strings.HasPrefix(n, "XXX_") {
+			continue
+		}
+		val := func() (b bool) {
+			success := false
+			defer func() {
+				if !success {
+					println("failed to check field " + n)
+				}
+			}()
+			b = n != "RepeatedCountMin" && n != "RepeatedCountMax" && v.Field(i).Pointer() != 0
+			success = true
+			return
+		}()
+		if val {
 			return true
 		}
 	}

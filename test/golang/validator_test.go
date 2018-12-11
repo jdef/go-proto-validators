@@ -531,3 +531,14 @@ func TestOneOf_Regex(t *testing.T) {
 	err = example.Validate()
 	assert.NoError(t, err, "This message should pass all validation")
 }
+
+func TestRuleConsumer3(t *testing.T) {
+	rc := &RuleConsumer3{
+		StringField: "abc",
+		SomeValue:   1,
+	}
+	err := rc.Validate()
+	if err != nil {
+		t.Fatal(err)
+	}
+}

@@ -12,6 +12,8 @@ message ValidatorMessage3 {
 	message Embedded {
 		string Identifier = 1 [(validator.field) = {regex: "^[a-z]{2,5}$"}];
 		int64 SomeValue = 2 [(validator.field) = {int_gt: 0, int_lt: 100}];
+
+                option (validator.rules) = true;
 	}
 
 	// String regex constraint tests.
@@ -69,4 +71,11 @@ message ValidatorMessage3 {
 	bytes SomeBytesLtReq = 39 [(validator.field) = {length_gt: 5}];
 	bytes SomeBytesGtReq = 40 [(validator.field) = {length_lt: 20}];
 	bytes SomeBytesEqReq = 41 [(validator.field) = {length_eq: 12}];
+
+        option (validator.rules) = true;
+}
+
+message RuleConsumer3 {
+        string string_field = 1 [(validator.field) = { rules : "ValidatorMessage3.SomeString" }];
+        int64 some_value = 2 [(validator.field) = { rules : "ValidatorMessage3.Embedded.SomeValue"}];
 }

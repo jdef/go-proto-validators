@@ -548,6 +548,11 @@ func TestRuleConsumer3(t *testing.T) {
 				F3: "a",
 			},
 		}},
+		{m: &RuleConsumer3{
+			StringField: "abc",
+			SomeValue:   1,
+			ValueRep:    []int64{2},
+		}},
 	} {
 		t.Run(strconv.Itoa(ti), func(t *testing.T) {
 			err := tc.m.Validate()

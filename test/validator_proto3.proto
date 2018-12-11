@@ -84,4 +84,5 @@ message RuleConsumer3 {
                 string f4 = 4 [(validator.field) = { rules : "ValidatorMessage3.SomeString" }];
         }
 
+        repeated int64 value_rep = 5 [(validator.field) = { rules : "ValidatorMessage3.Embedded.SomeValue"}];
 }
